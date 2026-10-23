@@ -1,0 +1,13 @@
+services:
+  harmony:
+    build: .
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-}
+      AWS_REGION: ${AWS_REGION:-eu-central-1}
+    volumes:
+      - harmony-data:/app/.data
+volumes:
+  harmony-data:
