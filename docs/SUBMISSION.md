@@ -74,5 +74,7 @@ Alexa+ — self-hosted MCP server with a clearly labeled simulated Alexa+ browse
 ## Friction log
 See FRICTION.md for observed tasks, expected versus actual outcomes, workarounds and suggestions. No external API failures or hardware tests are fabricated.
 
-## Demo video (to record)
-A publicly visible English YouTube/Vimeo video is still needed. Suggested 2–3 minute sequence: sing a short original phrase; preview and keep; add high sixth / low third; query the track list; play a selected pair; add a human harmony with headphones; keep the new track; save a mix and confirm a gift; show the MCP activity view. State clearly that Alexa+ is simulated and harmony uses local DSP.
+## Video materials
+A 2:08, 1920×1080 English screenshot walkthrough with synthetic narration and burned-in captions is included at docs/video/HarmonyMate-walkthrough.mp4, alongside an English SRT file and its reproducible build script. This introduces the implemented browser flow, independent tracks, overdubbing, gifts and the real MCP boundary. It clearly labels Alexa+ as simulated. No actual singing or generated harmony is audible in this presentation.
+
+A publicly viewable YouTube/Vimeo link is still needed for the Devpost video field. For a stronger product demonstration, supplement the introduction with a live recording: sing a short original phrase; preview and keep; add high sixth / low third; query the track list; play a selected pair; add a human harmony with headphones; keep the new track; save a mix and confirm a gift; show the MCP activity view.

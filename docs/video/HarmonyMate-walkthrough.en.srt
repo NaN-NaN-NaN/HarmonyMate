@@ -1,0 +1,86 @@
+1
+00:00:00,250 --> 00:00:05,227
+HarmonyMate turns a short sung phrase into something you can make together and give to
+someone you love.
+
+2
+00:00:05,727 --> 00:00:11,739
+This is a screenshot walkthrough of the working browser prototype, with a simulated Alexa
+Plus experience.
+
+3
+00:00:12,239 --> 00:00:19,915
+Start with your own unaccompanied phrase. After recording, listen to the preview and choose
+to keep it, sing again, or discard it.
+
+4
+00:00:20,415 --> 00:00:26,229
+A pending take never replaces a kept version. Recording does not automatically mean approval
+or sharing.
+
+5
+00:00:26,729 --> 00:00:33,600
+Choose higher or lower thirds, fifths, or sixths. Each generated harmony becomes an
+independent numbered track.
+
+6
+00:00:34,100 --> 00:00:42,620
+The engine estimates pitch and key, then processes the recorded voice locally with ffmpeg.
+This is digital signal processing, not an AI singer.
+
+7
+00:00:43,120 --> 00:00:51,506
+Listen to a track alone, or select up to eight tracks to hear together. Adjust their volume
+and timing, then save that exact combination as a mix.
+
+8
+00:00:52,006 --> 00:00:56,664
+Stable track numbers also make conversational requests easier to understand.
+
+9
+00:00:57,164 --> 00:01:01,889
+To sing a real human harmony, select the tracks you want to hear and put on headphones.
+
+10
+00:01:02,389 --> 00:01:09,189
+Record while those references play. The microphone is captured separately. Review and keep
+the new voice as another track.
+
+11
+00:01:09,689 --> 00:01:16,581
+Ask what tracks are available, play tracks one and three, or sing with track one. Common
+Chinese requests work too.
+
+12
+00:01:17,081 --> 00:01:26,336
+Thirteen tools cross a real authenticated HTTP MCP boundary. Alexa Plus is simulated in the
+browser; there is no live Echo microphone connection.
+
+13
+00:01:26,836 --> 00:01:32,772
+Save a mix as a musical gift. Review the recipient, note, and fixed version before
+confirming.
+
+14
+00:01:33,272 --> 00:01:39,112
+The recipient can play it in a demo inbox. Later retakes do not change a gift that was
+already shared.
+
+15
+00:01:39,612 --> 00:01:47,809
+The prototype implements recording, independent tracks, harmony processing, mixing,
+persistent storage, and confirmed gifts.
+
+16
+00:01:48,309 --> 00:01:57,174
+Next come listening tests with singers, improved timbre, and official Alexa Plus onboarding.
+Hardware latency and live Bedrock use are not verified.
+
+17
+00:01:57,674 --> 00:02:04,152
+Try HarmonyMate from the public repository. The README includes setup, tests, and the limits
+of the demo.
+
+18
+00:02:04,652 --> 00:02:07,627
+Sing a little. Hear the harmony. Make it together.

@@ -6,6 +6,12 @@ Sing any familiar, unaccompanied phrase for up to 30 seconds. Listen to the reco
 
 The Alexa+ experience is **simulated**. Browser microphone recording, persistent drafts, real HTTP MCP calls, authorization, local pitch analysis, audio processing and ffmpeg mixing are implemented. Echo recording and Alexa account linking are not connected.
 
+## Video walkthrough
+
+[Watch or download the 2:08 introduction](docs/video/HarmonyMate-walkthrough.mp4) · [English subtitles](docs/video/HarmonyMate-walkthrough.en.srt).
+
+This edited screenshot walkthrough uses synthetic English narration and describes the implemented browser flow. It does not include audible singing or harmony output, and is not a continuous recording or a demonstration of real Alexa hardware. See [video notes and reproducible build instructions](docs/video/README.md).
+
 ## Run locally
 
 Requirements: Node.js >=22.13 (24 LTS recommended), npm, `ffmpeg` and `ffprobe` on PATH. Node's SQLite may print an experimental warning.
