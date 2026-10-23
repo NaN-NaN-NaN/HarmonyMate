@@ -112,10 +112,18 @@ export function createApp(options: {
       .object({
         text: z.string().trim().min(1).max(1000),
         songId: z.string().max(128).optional(),
+        selectedTakeIds: z.array(z.string().min(1).max(128)).max(8).optional(),
       })
       .strict()
       .parse(req.body);
-    res.json(await agent.respond(actor, input.text, input.songId));
+    res.json(
+      await agent.respond(
+        actor,
+        input.text,
+        input.songId,
+        input.selectedTakeIds,
+      ),
+    );
   });
   const captureSchema = z
     .object({

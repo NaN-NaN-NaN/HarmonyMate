@@ -15,7 +15,7 @@ export class Store {
       songs: [
         {
           id: "a-little-closer",
-          title: "A little closer",
+          title: "Your first song",
           owner: "alex",
           members: ["alex", "ben"],
           createdAt: new Date().toISOString(),

@@ -1,5 +1,16 @@
 export type Actor = "alex" | "ben" | "mom";
 export type Part = "lead" | "harmony";
+export interface HarmonyOptions {
+  direction: "higher" | "lower";
+  interval: 3 | 5 | 6;
+}
+export const DEFAULT_HARMONY: HarmonyOptions = {
+  direction: "lower",
+  interval: 3,
+};
+export function harmonyLabel(options: HarmonyOptions = DEFAULT_HARMONY) {
+  return `${options.direction === "higher" ? "High" : "Low"} ${options.interval === 3 ? "3rd" : options.interval === 5 ? "5th" : "6th"} harmony`;
+}
 export interface Person {
   id: Actor;
   name: string;
@@ -34,7 +45,14 @@ export interface Take {
   muted: boolean;
   active: boolean;
   createdAt: string;
-  source: "microphone" | "sample-tone";
+  source: "microphone" | "sample-tone" | "generated-harmony";
+  reviewStatus?: "draft" | "kept" | "discarded";
+  parentTakeId?: string;
+  trackNumber?: number;
+  name?: string;
+  harmonyOptions?: HarmonyOptions;
+  referenceTakeIds?: string[];
+  replacesTakeId?: string;
   capture?: {
     firstFrame: number;
     scheduledFrame: number;
@@ -63,6 +81,11 @@ export interface Mix {
   file?: string;
   error?: string;
   fingerprint: string;
+  kind?: "harmony";
+  sourceTakeId?: string;
+  estimatedKey?: string;
+  harmonyFile?: string;
+  harmonyOptions?: HarmonyOptions;
 }
 export interface Surprise {
   id: string;
@@ -93,6 +116,8 @@ export interface RecordingSession {
   part: Part;
   expires: number;
   takeId?: string;
+  referenceTakeIds?: string[];
+  replacesTakeId?: string;
 }
 export interface Trace {
   id: string;
@@ -125,6 +150,7 @@ export interface Bootstrap {
     title: string;
     contributors: string[];
     containsSamples: boolean;
+    containsGeneratedHarmony?: boolean;
   })[];
   traces: Trace[];
   agentMode: "bedrock" | "scripted";
@@ -137,8 +163,14 @@ export interface AgentResponse {
   mode: "bedrock" | "scripted";
   degraded?: boolean;
   action?:
-    | { type: "guide"; part: Part; url: string }
-    | { type: "record"; part: Part; sessionId: string }
+    | {
+        type: "record";
+        part: Part;
+        sessionId: string;
+        referenceTakeIds?: string[];
+      }
+    | { type: "play_tracks"; takeIds: string[] }
+    | { type: "review"; takeId: string }
     | { type: "mix"; jobId: string }
     | { type: "share"; confirmationId: string }
     | { type: "reveal"; surpriseId: string; url: string }

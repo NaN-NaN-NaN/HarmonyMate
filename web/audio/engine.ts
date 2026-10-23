@@ -1,4 +1,7 @@
-import { encodeWav, SONG_SECONDS } from "../../shared/music.ts";
+import {
+  encodeWav,
+  RECORDING_SECONDS as SONG_SECONDS,
+} from "../../shared/music.ts";
 import type { Take } from "../../shared/types.ts";
 
 export type AudioState = {
@@ -114,8 +117,12 @@ export class AudioEngine {
       const duration = Math.max(
         ...buffers.map((b, i) => b.duration + selected[i].offsetMs / 1000),
       );
+      const headroom = Math.max(
+        1,
+        selected.reduce((sum, take) => sum + take.gain, 0),
+      );
       buffers.forEach((b, i) =>
-        this.schedule(b, at, selected[i].gain, selected[i].offsetMs),
+        this.schedule(b, at, selected[i].gain / headroom, selected[i].offsetMs),
       );
       this.emit({ mode: "playing", seconds: 0 });
       this.timer = setInterval(() => {
@@ -309,8 +316,12 @@ export class AudioEngine {
       input.connect(analyser);
       input.connect(node);
       node.connect(context.destination); // Worklet outputs silence: no microphone monitoring.
+      const headroom = Math.max(
+        1,
+        selected.reduce((sum, take) => sum + take.gain, 0),
+      );
       buffers.forEach((b, i) =>
-        this.schedule(b, at, selected[i].gain, selected[i].offsetMs),
+        this.schedule(b, at, selected[i].gain / headroom, selected[i].offsetMs),
       );
       if (guide) this.schedule(guide, at, selected.length ? 0.25 : 0.5);
       // Count-in clicks end before T0. Wired headphones avoid bleed.

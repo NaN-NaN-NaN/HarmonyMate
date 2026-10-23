@@ -21,7 +21,7 @@ export function say(text: string) {
   if (!("speechSynthesis" in window)) return;
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "en-US";
+  utterance.lang = /[\u3400-\u9fff]/.test(text) ? "zh-TW" : "en-US";
   utterance.rate = 0.98;
   window.speechSynthesis.speak(utterance);
 }

@@ -1,14 +1,14 @@
 # HarmonyMate
 
-**A little guidance. Your voices, together.**
+**Sing a little. Hear the harmony.**
 
-HarmonyMate turns a spontaneous “let’s sing” into a shared moment. Learn a short original melody, follow a lower harmony, record your own voice while listening to someone else, and save the result as a private musical gift.
+Sing any familiar, unaccompanied phrase for up to 30 seconds. Listen to the recording, explicitly keep it or sing again, then choose high or low thirds, perfect fifths or diatonic sixths made from a recorded voice. Every original, generated harmony and human overdub is an independent numbered track. Download the result or confirm an exact version as a musical gift.
 
-A new project developed during the Build, Ship, Shape: Amazon Developer Hackathon 2026. The Alexa+ experience is **simulated**. Microphone recording, independent takes, MCP calls, persistence, authorization and ffmpeg mixing are real.
+The Alexa+ experience is **simulated**. Browser microphone recording, persistent drafts, real HTTP MCP calls, authorization, local pitch analysis, audio processing and ffmpeg mixing are implemented. Echo recording and Alexa account linking are not connected.
 
 ## Run locally
 
-Requirements: **Node.js 24 LTS** (minimum 22.13), npm, `ffmpeg` and `ffprobe` on PATH. Node's built-in SQLite may print an experimental warning on some versions.
+Requirements: Node.js >=22.13 (24 LTS recommended), npm, `ffmpeg` and `ffprobe` on PATH. Node's SQLite may print an experimental warning.
 
 ```sh
 npm ci
@@ -16,130 +16,69 @@ cp .env.example .env
 npm run dev
 ```
 
-Open [HarmonyMate](http://127.0.0.1:3000). No AWS or Supabase account is required for the local scripted simulator. The default server binds to loopback only.
+Open the URL printed in the terminal (default [localhost:3000](http://127.0.0.1:3000)). Set `PORT` in `.env` if another app uses that port. This workstation currently uses **3001**. No AWS account, external audio service or downloaded voice model is required.
 
-For a production build:
+For production, `npm run build` then `npm start`. Or use `docker compose up --build` with a running Docker daemon; Docker runtime verification remains environment-dependent.
 
-```sh
-npm run build
-npm start
-```
+## The experience
 
-Or, with a running Docker daemon:
+1. Enter as Alex without a login. Press **Record my part** and allow microphone access.
+2. After a three-second count-in, sing a phrase you know without background music. Press **Finish take**, or let capture finish at 30 seconds. No guide melody, part selector or headphone checklist is required.
+3. The recording becomes a **draft**, and the browser starts a preview. Choose **Keep this take**, **Sing again** or **Discard this take**. Stop/replay is always available. A draft never replaces the previous kept version, enters a mix or gets shared. Leaving/reloading preserves it for review.
+4. Keeping an initial take explicitly selects it and queues a default low-third harmony. **Add a generated harmony** lets you choose the source recording, Higher/Lower, and 3rd/5th/6th. Every variant has its own file, track number and playback/download controls; requesting the same variant again reuses its job. Keeping a human overdub simply adds that track without generating another part. The original audio file is unchanged. When ready, choose **Listen with harmony** or **Original only**. Processing does not automatically start playback or send a gift.
+5. Discard is reversible through **Undo** or **Your songs & earlier recordings**. Starting a new successful attempt archives the previous pending draft as discarded; a failed/cancelled attempt does not replace it. Earlier confirmed recordings remain available to listen to.
+6. Select up to eight tracks, then **Play selected together**, **Sing with selected tracks** or **Save selected mix**. Overdub requires headphones: selected voices are scheduled with microphone capture in the same AudioContext, while only microphone PCM is uploaded as a new draft. The reference track IDs are preserved. Kept overdubs add a new voice; retakes replace only their declared source selection. Every kept track, including earlier versions, stays individually playable. Expand track settings to rename a track or adjust volume/manual timing.
+7. The result is saved without another step. Download it, or optionally choose **Make a gift**, review the recipient/note/exact version and confirm sending to Mom's inbox.
 
-```sh
-docker compose up --build
-```
+Switch freely between Alex, Ben and Mom with **Demo singer**. These are demonstration roles, not private family identities. Drafts are only exposed to their singer; kept project takes can be accessed by authorized members. Demo profile switching is not production authentication. Use test material.
 
-Docker installs ffmpeg and keeps data in a persistent volume. Compose exposes the app on localhost. Docker runtime verification is pending because this machine's daemon was unavailable; native build and tests passed.
+Text commands and optional English/Traditional Chinese browser speech input support requests such as “what tracks do I have?”, “play tracks 1 and 3”, “sing with track 1”, “make high sixth harmony from track 1”, “play original and low third harmony”, “save a mix of tracks 1 and 2”, “keep”, “discard”, and “undo”. Chinese examples: 「目前有哪些音軌？」「播放第 1、3 軌」「跟第 1 軌一起唱」「幫第 1 軌加高六度和聲」「播放原唱跟低三度」. Stable track numbers are independent of list position; unknown/ambiguous tracks prompt clarification. The assistant uses the same authorized selection tools as the UI. Browser recording still requires a button click. Browser speech recognition may use the browser vendor's service; the song-processing pipeline itself runs locally. Spoken responses are opt-in. Conversation defaults to scripted intent handling; `BEDROCK_MODEL_ID` and standard AWS credentials optionally enable Converse tool use, which still needs validation with a real AWS account.
 
-## Demo profiles
+## How the harmony is made
 
-The app opens immediately as **Alex**. Use the **Demo singer** selector to switch to **Ben** or **Mom**. No login or password is required; these are freely switchable demonstration roles, not production identities or Alexa household accounts.
+This is **local DSP, not a generative AI singer or voice-cloning service**:
 
-- Alex owns the starter song, “A little closer”.
-- Ben is a preauthorized contributor to the starter song and songs created by Alex. This fixture replaces invitation delivery in the MVP.
-- Mom sees her surprise inbox, without access to Alex and Ben's projects or individual tracks.
+- Normalize the recording to 48 kHz mono PCM.
+- Detect single-voice pitch with a YIN-style difference function every 20 ms.
+- Estimate a major/minor key from the sung pitch distribution.
+- Choose high/low diatonic thirds (three or four semitones), perfect fifths (seven semitones), or diatonic sixths (eight or nine semitones), smooth note transitions and gate unvoiced regions.
+- Transpose the needed copies using stock ffmpeg `asetrate`/`aresample`/`atempo`, blend according to the detected notes, and mix a quieter harmony with the original.
 
-The role selector is available at the bottom of the navigation, including on narrow screens. Use test material: anyone can select any demo role. Per-song/recipient checks still apply to the selected role, but this is not private user authentication.
+Short, clean, unaccompanied phrases work best. Key estimation is ambiguous for short melodies, changing keys or chromatic singing. Pitch shifting changes vocal timbre and can sound synthetic; atempo can smear consonants and note boundaries. It does not understand lyrics, infer chords from accompaniment, arrange arbitrary songs or guarantee musical correctness. If no clear pitched singing is detected, generation reports an error while preserving the recording. Original-only playback and retry remain available.
 
-## Try the recording workflow
+Synthetic tests establish musical interval changes, preserved sample duration and non-destructive source handling. Physical singing quality, microphone acoustics and speaker-only rehearsal require listening tests with actual users/devices.
 
-1. Open the app as Alex. Choose **Record my voice**, or listen to **Melody** in the studio first.
-2. Choose **Record my part** and allow the browser microphone. No headphone checkbox is required to start. A three-second count-in precedes the original 17-second exercise. Finish early with **Finish take**, or let it finish automatically. Permission setup can be cancelled; blocked, missing or busy microphones show a persistent explanation and retry instructions.
-3. Switch to Ben with **Demo singer**, put on wired headphones, and enable **Play existing voices in my headphones** to overdub Alex's take. Optionally enable **Play my guide while I sing**. Playback is off by default so a first recording works without headphones and avoids speaker bleed. The microphone is stored separately from reference playback.
-4. Preview voices, adjust volume or timing, and choose **Bring us together**. ffmpeg renders a saved mix in the background.
-5. Switch to Alex; choose **Make a surprise for Mom**, review the recipient, note and exact mix version, then confirm.
-6. Switch to Mom; choose **Listen to my surprise**. Opening and playback completion are recorded separately.
-
-Retakes preserve original files, marking the previous take inactive. Existing mixes/gifts reference an immutable snapshot. Earlier takes can be played; a full version editor is deferred.
-
-### Test without a microphone
-
-Under **Recording settings**, choose **Add a sample guide tone for testing**. Add a melody as Alex and a harmony as Ben, then mix and send. Instrumental tracks are visibly labeled **SAMPLE GUIDE TONE**, including in the mix. This tests the pipeline, not human singing or acoustic synchronization.
-
-**Check audio engine (no microphone)** runs a silent synthetic oscillator through the real browser AudioWorklet. It checks captured sample count and T0 alignment without requesting microphone access. It does not measure physical device latency.
-
-## Conversation and voice
-
-Type a command or use the microphone button for optional browser speech recognition. Buttons/text remain available. Spoken responses are opt-in using the speaker button.
-
-Default: **Scripted simulator mode**. Examples:
-
-- “I feel like singing.”
-- “Teach me the lower harmony.”
-- “Record my part.”
-- “Let us hear it together.”
-- “Make my voice quieter.”
-- “Save this as a surprise for Mom.”
-- As Mom: “Do I have a musical surprise?” / “Play my surprise.”
-
-Commands prepare a recording card rather than silently activating the microphone. Sharing requires the UI confirmation. Command recognition and speech output stop during singing. Browser speech recognition may use the browser vendor's service; it is separate from raw song capture.
-
-### Optional Amazon Bedrock
-
-Set `BEDROCK_MODEL_ID` to a model supporting Converse tool use in the selected region, set `AWS_REGION`, and supply credentials through the standard SDK chain (profile, environment, or execution role). Credentials never enter browser code or model prompts.
-
-The agent maps the actual MCP schemas to Bedrock Converse, executes selected tools over HTTP MCP, returns results, and produces short replies. Rounds, calls, retries and request duration are bounded. On AI failure an explicit degraded message appears; possibly completed writes are not silently replayed through scripted routing. Studio buttons continue to work.
-
-Bedrock is implemented but **not verified against a live AWS account**; no model ID was configured. Do not claim runtime AWS usage without documenting a successful call. Polly is deferred; speech output uses browser TTS.
-
-## Architecture
+## Architecture and MCP
 
 ```text
-React + Vite / Web Audio / AudioWorklet
-  ├─ REST: authentication, WAV upload, explicit confirmations
-  └─ /api/agent or /api/tools
-          │
-     Official SDK MCP client
-          │ authenticated Streamable HTTP
-     /mcp → validated tools → domain services
-                               ├─ SQLite + private files
-                               └─ persisted mix jobs → ffmpeg
+React / Web Audio / AudioWorklet
+  → provisional WAV upload → explicit take review
+  → authenticated MCP generate_harmony → persisted background job
+  → pitch analysis + ffmpeg → immutable source/harmony mix
+  → optional confirmed musical gift
 ```
 
-One Express service serves frontend and backend. SQLite/private files deliberately replace the initial Supabase proposal for a reproducible demo without cloud credentials. This MVP supports **one process and one instance**. Do not run multiple instances against one data directory; managed storage and atomic job claiming are needed before scaling.
-
-Data lives under `.data/`, excluded from Git and static serving. A random local session secret is generated with restrictive permissions unless configured. WAV uploads are normalized to 48 kHz mono; original capture frame/rate metadata is preserved separately. The original exercise is 112 BPM, C major, approximately 17 seconds.
-
-One AudioContext schedules reference playback and PCM capture. Manual signed offsets are supported: positive delays, negative trims the beginning. Synthetic tests verify sample alignment; **physical input/output latency, bleed and real singers' timing require device rehearsal**. `baseLatency + outputLatency` is not treated as a complete round-trip measurement. Automatic hardware calibration is deferred.
-
-## MCP
-
-Endpoint: `POST /mcp`. **Streamable HTTP**, stateless JSON responses, official `@modelcontextprotocol/sdk` **1.32.1**. Tests initialize and verify protocol **2025-11-25**, then execute `tools/list` and `tools/call` through the SDK client.
+Thirteen official-SDK MCP tools use authenticated stateless Streamable HTTP at `POST /mcp`, negotiating protocol `2025-11-25`:
 
 | Tool | Purpose |
 |---|---|
 | `create_song` | Idempotent project creation |
-| `get_song` | Authorized tracks, mixes and playback links |
-| `get_harmony_guide` | Curated lead/lower harmony tone |
-| `start_recording_session` | Expiring actor-bound browser recording session |
-| `set_track_mix` | Gain, mute, signed offset, active selection |
-| `create_mix` | Persist and queue real ffmpeg mixing |
-| `get_mix_status` | Processing state and finished audio |
-| `create_surprise` | Prepare share or commit a UI-accepted confirmation |
-| `list_surprises` | Authenticated recipient's inbox |
-| `reveal_surprise` | Recipient-only opening and temporary audio link |
+| `get_song` | Authorized project, takes and immutable mixes |
+| `list_tracks` | Kept tracks with stable numbers, names, provenance and individual audio URLs |
+| `play_tracks` | Validate and return exactly the requested track IDs for combined browser playback |
+| `start_recording_session` | Actor-bound recording/overdub session with exact reference IDs and optional replacement target |
+| `review_take` | Explicit keep, reversible discard or restore |
+| `generate_harmony` | Queue/idempotently reuse a high/low 3rd/5th/6th variant for a kept original voice |
+| `get_mix_status` | Background job status and finished playback URL |
+| `set_track_mix` | Advanced control of previously kept takes |
+| `create_mix` | Immutable mix of explicit take IDs, or active kept tracks by default |
+| `create_surprise` | Prepare or commit an explicitly UI-confirmed fixed-version gift |
+| `list_surprises` | Recipient inbox |
+| `reveal_surprise` | Recipient-only opening and temporary playback URL |
 
-All simulator tool operations, including scripted commands, cross real HTTP MCP. The activity page shows actual per-profile server tool execution; timings exclude network/agent time. Annotations describe tool behavior; domain authorization is independent of the model.
+`get_harmony_guide` has been removed. The original tone-rendering utility and labeled `/sample` upload route remain only for automated pipeline fixtures; the product does not suggest a melody.
 
-MCP accepts only short-lived server-signed demo Bearer tokens. Unauthenticated requests return 401 without `WWW-Authenticate`, matching Alexa+'s client-specific guidance. This is **demo auth**, not Alexa OAuth/account linking. MCP credentials are not issued through a public browser API; the local smoke script signs a temporary read-test token with the local secret.
-
-Uploads are size/duration bounded, expiring, actor-bound and idempotent. ffprobe validates files. Audio URLs expire after five minutes and recheck access. Signed links are temporary bearer capabilities; do not redistribute them. Sharing binds to one mix and recipient. Model-supplied `confirmed: true` is rejected.
-
-## Environment
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `PORT` | `3000` | HTTP port |
-| `HOST` | `127.0.0.1` | Bind address; Docker uses `0.0.0.0` internally |
-| `DATA_DIR` | `.data` | Persistent private data directory |
-| `SESSION_SECRET` | Generated/persisted locally | Signing key; set a long random value on shared hosts |
-| `BEDROCK_MODEL_ID` | Empty | Enable optional Converse agent |
-| `AWS_REGION` | `eu-central-1` | Bedrock region |
-| `PUBLIC_ORIGIN` | Local request origin | Exact external HTTPS origin when hosting |
-
-Hosting requires HTTPS, durable data, explicit origin, appropriate credentials and a single instance. Browser microphone access outside localhost requires HTTPS. Nothing is publicly deployed. Compose does not forward host AWS profiles; supply an appropriate credential mechanism to test Bedrock inside Docker.
+SQLite and private files live under `.data/`. Run one process/instance per data directory. Jobs are persisted, failed jobs can be retried, and ready results remain bound to their original source recording. Existing stored recordings without a review field are treated as previously kept for compatibility. Old gifts stay immutable. Draft/discarded audio is private to its singer. Audio URLs expire after five minutes and recheck access. Uploads are bounded to 8 MB / 30 seconds and actor-bound/idempotent. Demo MCP tokens are server-signed and not publicly issued to browsers; this does not implement Alexa OAuth account linking.
 
 ## Verification
 
@@ -147,27 +86,28 @@ Hosting requires HTTPS, durable data, explicit origin, appropriate credentials a
 npm run check
 npm test
 npm run build
-# With the app running in another terminal:
+# With the app running:
 npm run smoke
 ```
 
-Tests cover entry without login, password-free profile switching, an enabled recording control, blocked microphone/retry, captured PCM-to-WAV upload, cancellation with late permission, real HTTP MCP, protocol negotiation, role authorization, creation/upload/share idempotency, preserved takes, actual ffmpeg output, both offset directions, AudioWorklet block boundaries, confirmation, fixed-version gifts, expired URLs and opened/played states. Test data is generated instrumental audio in isolated temporary directories.
+Tests additionally verify all six pitch options against known note frequencies, independent stem access, stable track numbers, legacy stem migration, exact-subset mixes, bilingual track commands, rejected unknown/ambiguous tracks, and headphones overdub scheduling with microphone-only PCM upload. Tests cover direct entry, role switching, real HTTP MCP, denied/retried/cancelled microphone setup, PCM upload, draft review/undo, no generation before acceptance, draft privacy, mix/share authorization, preserved original files and gifts after retakes, idempotent generation, actual ffmpeg output, changing diatonic intervals, identical source/output sample duration, quiet rests and silence rejection. Synthetic AudioWorklet tests check sample alignment, not physical latency.
 
-The browser workflow was exercised with labeled sample tones. Physical microphone capture, headphone alignment, speech recognition and AWS need environment-specific checks; synthetic tests do not establish performance on your hardware.
+## Environment
 
-## Simulated or deferred
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `3000` | HTTP port |
+| `HOST` | `127.0.0.1` | Loopback bind |
+| `DATA_DIR` | `.data` | Persistent storage |
+| `SESSION_SECRET` | Generated locally | Token signing |
+| `BEDROCK_MODEL_ID` | Empty | Optional Converse conversation |
+| `AWS_REGION` | `eu-central-1` | Optional AWS region |
+| `PUBLIC_ORIGIN` | Local request origin | Exact external HTTPS origin |
 
-- Alexa+ presentation: no Echo connection or restricted preview SDK.
-- Freely switchable demo roles: no login, household identity, or speaker identification.
-- Curated guide tones: no arbitrary-song analysis, AI singer, pitch correction or automatic harmonization.
-- Inbox when opening HarmonyMate: no proactive native Alexa notifications.
-- Preauthorized Ben membership: no invitation delivery or external messages.
-- Polly, Supabase, public hosting, real-time remote singing and automatic latency calibration are deferred.
+This is not publicly deployed. Hosting requires HTTPS for browser microphone access, persistent single-instance storage, proper identity and explicit origin configuration. Bedrock, Docker runtime and Alexa hardware are not established by local synthetic tests.
 
-## Material and licenses
+## Licenses and history
 
-“A little closer” is an original note-sequence exercise in `shared/music.ts`, rendered with additive sine tones. No third-party songs, samples, celebrity voices or Amazon/Alexa logos. Code/composition: MIT. Guides are instrumental tones, not synthesized human singers.
+Code and the original instrumental test exercise: MIT. Users choose what they sing; the app does not distribute a song catalog or third-party backing tracks. React, Vite, Express, Zod, Lucide, tsx and MCP SDK retain their licenses; AWS SDK is Apache-2.0; bundled fonts are SIL OFL. ffmpeg licensing depends on its build.
 
-Dependencies keep their licenses: React, Vite, Express, Zod, Lucide, tsx and MCP TypeScript SDK (MIT); AWS SDK (Apache-2.0); bundled DM Sans/Manrope fonts (SIL Open Font License via Fontsource). Fonts are served locally. ffmpeg's LGPL/GPL terms depend on its build; consult that distribution before redistribution.
-
-See [plan](docs/HARMONYMATE_PLAN.md), [official checks](OFFICIAL_SOURCE_CHECK.md), [implementation status](docs/IMPLEMENTATION_STATUS.md), and [friction log](FRICTION.md).
+The project was developed for Build, Ship, Shape: Amazon Developer Hackathon 2026. Earlier plans and friction notes describe the original curated-melody/two-singer prototype and are historical: [plan](docs/HARMONYMATE_PLAN.md), [official checks](OFFICIAL_SOURCE_CHECK.md), [friction log](FRICTION.md). See [current implementation status](docs/IMPLEMENTATION_STATUS.md).

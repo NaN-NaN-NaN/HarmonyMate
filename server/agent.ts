@@ -7,6 +7,8 @@ import {
   type ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
 import { z } from "zod";
+import { trackIntent } from "./track-commands.ts";
+import { harmonyLabel } from "../shared/types.ts";
 import {
   descriptions,
   schemas,
@@ -34,7 +36,19 @@ export class Agent {
     actor: Actor,
     text: string,
     songId?: string,
+    selectedTakeIds: string[] = [],
   ): Promise<AgentResponse> {
+    const context = this.harmony.bootstrap(actor);
+    const active =
+      context.songs.find((s) => s.id === songId) ?? context.songs[0];
+    if (active && trackIntent(text, active.takes, actor, selectedTakeIds))
+      return this.scripted(actor, text, songId, selectedTakeIds);
+    if (
+      /^(keep( this( take)?)?|留[下著這]*|留下這次|discard( this( take)?)?|捨棄|不要了|restore|復原|undo)[.!。！]?$/i.test(
+        text.trim(),
+      )
+    )
+      return this.scripted(actor, text, songId, selectedTakeIds);
     if (process.env.BEDROCK_MODEL_ID) {
       try {
         return await this.converse(actor, text, songId);
@@ -51,24 +65,21 @@ export class Agent {
         };
       }
     }
-    return this.scripted(actor, text, songId);
+    return this.scripted(actor, text, songId, selectedTakeIds);
   }
   private action(name: ToolName, result: ToolResult): AgentResponse["action"] {
     if (name === "create_song")
       return { type: "song", songId: (result.song as { id: string }).id };
-    if (name === "get_harmony_guide")
-      return {
-        type: "guide",
-        part: result.part as Part,
-        url: String(result.url),
-      };
     if (name === "start_recording_session")
       return {
         type: "record",
         part: result.part as Part,
         sessionId: String(result.sessionId),
+        referenceTakeIds: result.referenceTakeIds as string[] | undefined,
       };
-    if (name === "create_mix")
+    if (name === "play_tracks")
+      return { type: "play_tracks", takeIds: result.takeIds as string[] };
+    if (name === "create_mix" || name === "generate_harmony")
       return { type: "mix", jobId: String(result.jobId) };
     if (name === "create_surprise" && result.requiresConfirmation)
       return { type: "share", confirmationId: String(result.confirmationId) };
@@ -83,11 +94,12 @@ export class Agent {
     actor: Actor,
     text: string,
     requestedSong?: string,
+    selectedTakeIds: string[] = [],
   ): Promise<AgentResponse> {
     const context = this.harmony.bootstrap(actor);
     const song =
       context.songs.find((s) => s.id === requestedSong) ?? context.songs[0];
-    const t = text.toLowerCase();
+    const t = text.trim().toLowerCase();
     const reply = (
       text: string,
       action?: AgentResponse["action"],
@@ -100,98 +112,195 @@ export class Agent {
       const result = await this.tools.call(actor, name, args);
       return reply(message, this.action(name, result));
     };
-    if (/surprise|gift|驚喜|禮物/.test(t) && actor === "mom") {
+    if (actor === "mom") {
+      if (/play|listen|播放|聽/.test(t) && context.surprises.length)
+        return call(
+          "reveal_surprise",
+          { surpriseId: context.surprises[0].id },
+          "Let’s listen.",
+        );
       const result = await this.tools.call(actor, "list_surprises", {});
       return reply(
         (result.surprises as unknown[]).length
-          ? "There’s a little song waiting for you. Open your inbox and choose “Listen to my surprise”."
-          : "No musical gifts yet. Something lovely may be on its way.",
+          ? "There’s a song waiting in your inbox."
+          : "No musical gifts yet.",
       );
     }
-    if (
-      /listen|play|hear|播放|聽/.test(t) &&
-      actor === "mom" &&
-      context.surprises.length
-    ) {
-      return call(
-        "reveal_surprise",
-        { surpriseId: context.surprises[0].id },
-        "This one is just for you. Let’s listen.",
-      );
-    }
-    if (/new song|create|start over|建立|新歌/.test(t))
+    if (/new song|create|start over|新歌|建立/.test(t))
       return call(
         "create_song",
-        { title: "A little closer", idempotencyKey: randomUUID() },
-        "A fresh little song. Let’s hear the melody, then make it yours.",
+        { title: "Untitled song", idempotencyKey: randomUUID() },
+        "Sing any short phrase you know. Your recording card is ready.",
       );
-    if (!song)
+    if (!song) return reply("Create a song to start singing.");
+    const draft = song.takes.findLast(
+      (take) => take.actor === actor && take.reviewStatus === "draft",
+    );
+    const kept = song.takes.findLast(
+      (take) =>
+        take.actor === actor &&
+        take.source !== "generated-harmony" &&
+        take.active &&
+        (take.reviewStatus ?? "kept") === "kept",
+    );
+    if (/^(keep( this( take)?)?|留下|留下這次)[.!。！]?$/.test(t)) {
+      if (!draft) return reply("There’s no new recording to review.");
+      await this.tools.call(actor, "review_take", {
+        songId: song.id,
+        takeId: draft.id,
+        decision: "keep",
+      });
+      return call(
+        "generate_harmony",
+        { songId: song.id, takeId: draft.id },
+        "Kept. I’m making a lower harmony from your voice.",
+      );
+    }
+    if (/^(discard( this( take)?)?|捨棄|不要了)[.!。！]?$/.test(t)) {
+      if (!draft) return reply("There’s no new recording to discard.");
+      await this.tools.call(actor, "review_take", {
+        songId: song.id,
+        takeId: draft.id,
+        decision: "discard",
+      });
       return reply(
-        "Open your inbox to hear a musical gift, or create a new song to start singing.",
+        "Discarded. Your last kept recording is safe. Say ‘undo’ to restore this draft.",
       );
-    if (/send|share|save.*mom|surprise|gift|送|分享/.test(t)) {
-      const mix = song.mixes.findLast((m) => m.status === "ready");
-      if (!mix)
+    }
+    if (/^(restore|undo|復原)[.!。！]?$/.test(t)) {
+      const discarded = song.takes.findLast(
+        (take) => take.actor === actor && take.reviewStatus === "discarded",
+      );
+      if (!discarded)
+        return reply("There’s no discarded recording to restore.");
+      await this.tools.call(actor, "review_take", {
+        songId: song.id,
+        takeId: discarded.id,
+        decision: "restore",
+      });
+      return reply("Restored for review.", {
+        type: "review",
+        takeId: discarded.id,
+      });
+    }
+    const intent = trackIntent(text, song.takes, actor, selectedTakeIds);
+    const zh = /[\u3400-\u9fff]/.test(text);
+    if (intent?.type === "list") {
+      const result = await this.tools.call(actor, "list_tracks", {
+        songId: song.id,
+      });
+      const tracks = result.tracks as typeof song.takes;
+      return reply(
+        tracks.length
+          ? (zh ? "目前的音軌：\n" : "Your tracks:\n") +
+              tracks
+                .map(
+                  (take) =>
+                    `#${take.trackNumber} ${take.name} (${take.source === "generated-harmony" ? (zh ? "生成和聲" : "generated") : zh ? "錄音" : "recorded"}${!take.active ? (zh ? "，先前版本" : ", earlier version") : ""})`,
+                )
+                .join("\n") +
+              (zh
+                ? "\n可以說「播放第 1、2 軌」或「跟第 1 軌一起唱」。"
+                : "\nTry ‘play tracks 1 and 2’ or ‘sing with track 1’.")
+          : zh
+            ? "還沒有已留下的音軌。先錄一段並確認留下。"
+            : "No kept tracks yet. Record and keep a phrase first.",
+      );
+    }
+    if (intent?.type === "error") return reply(intent.message);
+    if (intent?.type === "play")
+      return call(
+        "play_tracks",
+        { songId: song.id, takeIds: intent.takeIds },
+        zh ? "播放指定音軌。" : "Playing your selected tracks.",
+      );
+    if (intent?.type === "overdub")
+      return call(
+        "start_recording_session",
+        {
+          songId: song.id,
+          part: "harmony",
+          addTrack: true,
+          referenceTakeIds: intent.takeIds,
+        },
+        zh
+          ? "已選好伴唱音軌。戴上耳機，再按錄音；你的聲音會存成獨立一軌。"
+          : "Your reference tracks are selected. Put on headphones, then press record to add a separate voice track.",
+      );
+    if (intent?.type === "mix")
+      return call(
+        "create_mix",
+        { songId: song.id, takeIds: intent.takeIds },
+        zh
+          ? "正在保存指定音軌的混音。"
+          : "Saving a mix of exactly those tracks.",
+      );
+    if (intent?.type === "generate") {
+      if (draft)
         return reply(
-          "Let’s record and make a mix first. Then you can send it to Mom.",
+          zh
+            ? "請先決定新錄音要留下或捨棄。"
+            : "Keep or discard your new recording first.",
+          { type: "review", takeId: draft.id },
         );
+      return call(
+        "generate_harmony",
+        { songId: song.id, takeId: intent.takeId, ...intent.options },
+        zh
+          ? `正在產生${intent.options.direction === "higher" ? "高" : "低"}${intent.options.interval}度和聲。`
+          : `Making ${harmonyLabel(intent.options).toLowerCase()}.`,
+      );
+    }
+    if (/send|share|gift|surprise|送|分享|禮物/.test(t)) {
+      if (draft)
+        return reply("Keep or discard your new recording first.", {
+          type: "review",
+          takeId: draft.id,
+        });
+      const mix = song.mixes.findLast(
+        (m) =>
+          m.status === "ready" &&
+          (m.kind !== "harmony" || m.sourceTakeId === kept?.id),
+      );
+      if (!mix) return reply("Keep a recording and finish its harmony first.");
       return call(
         "create_surprise",
         {
           songId: song.id,
           mixId: mix.id,
           recipient: "mom",
-          message: "A little song, from us to you.",
+          message: "A little song, from me to you.",
         },
-        "A song for Mom. Review this version and confirm when you’re ready.",
+        "Review this version and recipient before sending.",
       );
     }
-    if (/together|mix|合起|混音|一起聽/.test(t))
+    if (/harmony|together|mix|和聲|一起聽|混音/.test(t)) {
+      if (draft)
+        return reply("Listen to your recording, then keep it or sing again.", {
+          type: "review",
+          takeId: draft.id,
+        });
+      if (!kept)
+        return reply("Sing a short phrase first. No guide melody needed.");
       return call(
-        "create_mix",
-        { songId: song.id },
-        "Bringing your voices together. Your original takes will stay just as they are.",
+        "generate_harmony",
+        { songId: song.id, takeId: kept.id },
+        "I’m making a lower harmony from your voice.",
       );
-    if (/record|ready|錄|準備好/.test(t))
+    }
+    if (/listen|play|hear|聽|播放/.test(t) && draft)
+      return reply("Here’s your recording. Keep it or sing again.", {
+        type: "review",
+        takeId: draft.id,
+      });
+    if (/sing|record|ready|again|唱|錄|重來|準備/.test(t))
       return call(
         "start_recording_session",
-        {
-          songId: song.id,
-          part:
-            /harmony|lower|和聲/.test(t) || actor === "ben"
-              ? "harmony"
-              : "lead",
-        },
-        "Put on wired headphones. Your recording card is ready when you are.",
-      );
-    if (/harmony|lower|ben|和聲/.test(t))
-      return call(
-        "get_harmony_guide",
-        { songId: song.id, part: "harmony" },
-        "Here’s the lower part. Listen once, then try humming along.",
-      );
-    if (/quieter|softer|小聲/.test(t)) {
-      const take = song.takes.findLast((t) => t.actor === actor && t.active);
-      if (!take)
-        return reply("Record your first take, and I can help balance it.");
-      return call(
-        "set_track_mix",
-        {
-          songId: song.id,
-          takeId: take.id,
-          gain: Math.max(0, take.gain - 0.15),
-        },
-        "A little softer. Make a new mix when it feels right.",
-      );
-    }
-    if (/sing|melody|lead|play|listen|again|唱|旋律|再一次/.test(t))
-      return call(
-        "get_harmony_guide",
         { songId: song.id, part: "lead" },
-        "Let’s sing “A little closer”. Start with this short melody. There’s no need to get it perfect.",
+        "Sing any short phrase. Press record when you’re ready.",
       );
     return reply(
-      "Try “I feel like singing”, “Teach me the lower harmony”, “Record my part”, or “Let us hear it together”.",
+      "Try ‘record my voice’, ‘keep’, ‘sing again’, or ‘make harmony’.",
     );
   }
   private async converse(
@@ -203,16 +312,19 @@ export class Agent {
     const active =
       context.songs.find((s) => s.id === songId) ?? context.songs[0];
     const tools: ToolConfiguration = {
-      tools: (Object.keys(schemas) as ToolName[]).map((name) => ({
-        toolSpec: {
-          name,
-          description: descriptions[name],
-          inputSchema: { json: z.toJSONSchema(schemas[name]) as never },
-        },
-      })),
+      tools: (Object.keys(schemas) as ToolName[])
+        .filter((name) => name !== "review_take")
+        .map((name) => ({
+          toolSpec: {
+            name,
+            description: descriptions[name],
+            inputSchema: { json: z.toJSONSchema(schemas[name]) as never },
+          },
+        })),
     };
     const messages: Message[] = [{ role: "user", content: [{ text }] }];
-    const system = `You are HarmonyMate, a warm, concise singing companion in a clearly labeled Alexa+ simulator. Reply in at most two short sentences, in the user's language. You help humans sing; the guides are curated instrumental tones, never AI-generated vocals. No native Echo microphone, identity or notifications. User=${actor}. Active song=${active?.id ?? "none"}. Accessible songs=${JSON.stringify(context.songs.map((s) => ({ id: s.id, title: s.title, takes: s.takes.map((t) => ({ id: t.id, actor: t.actor, active: t.active })), readyMixes: s.mixes.filter((m) => m.status === "ready").map((m) => m.id) })))}. Recipient inbox IDs=${JSON.stringify(context.surprises.map((s) => s.id))}. Use tools for actual actions, never claim an action without success. For 'I feel like singing', retrieve the lead guide. For harmony retrieve harmony guide. To record prepare a recording session (the user must press the recording button). To hear voices together create a mix. To share call create_surprise WITHOUT confirmationId, then tell user to review the UI card. Only the user UI accepts confirmations; do not ask tools to manufacture approval. Never reveal a gift unless this user asks to listen. An idempotencyKey for a new song can be '${randomUUID()}'.`;
+    const system = `You are HarmonyMate, a concise singing companion. Reply in the user's language in at most two short sentences. Users sing any unaccompanied phrase up to 30 seconds, review it, explicitly keep or discard it, then generate_harmony offers high/low thirds, perfect fifths and diatonic sixths as independent tracks. list_tracks lists stable track numbers, play_tracks plays the exact selection, and start_recording_session with referenceTakeIds and addTrack=true prepares headphones overdubbing. create_mix accepts exact takeIds. This is pitch-shifted recorded voice, not an AI voice model. No melody guides. No Echo microphone connection. User=${actor}. Active song=${active?.id ?? "none"}. Context=${JSON.stringify(context.songs)}. Never keep/discard without user action; review buttons or explicit keep/discard commands handle this. Drafts cannot be mixed. For recording prepare start_recording_session; the user presses record. For harmony only use a kept active recording owned by the user. Never invent audio or imply harmony is ready before get_mix_status says ready. For sharing, create_surprise without confirmationId and direct the user to the UI confirmation. Never accept sharing on their behalf. New song idempotencyKey=${randomUUID()}.`;
+
     let action: AgentResponse["action"];
     for (let round = 0; round < 4; round++) {
       const response = await this.bedrock.send(
@@ -253,6 +365,8 @@ export class Agent {
           // Models cannot commit shares, even if they invent a confirmation ID.
           const args = { ...(call.input as Record<string, unknown>) };
           if (name === "create_surprise") delete args.confirmationId;
+          if (name === "review_take")
+            throw new Error("Use explicit review controls.");
           const result = await this.tools.call(actor, name, args);
           action = this.action(name, result) ?? action;
           content = [{ json: result as never }];

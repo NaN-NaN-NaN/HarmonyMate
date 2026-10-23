@@ -68,6 +68,7 @@ test("recording entry, denied permission, successful WAV upload, and cancellatio
       },
     },
   });
+  let referenceStarts = 0;
   class Graph {
     frequency = { value: 440 };
     gain = { value: 1, setValueAtTime() {}, exponentialRampToValueAtTime() {} };
@@ -105,6 +106,16 @@ test("recording entry, denied permission, successful WAV upload, and cancellatio
       }
       createGain() {
         return new Graph();
+      }
+      decodeAudioData(bytes: ArrayBuffer) {
+        return Promise.resolve({ duration: (bytes.byteLength - 44) / 96000 });
+      }
+      createBufferSource() {
+        const source = new Graph();
+        source.start = () => {
+          referenceStarts++;
+        };
+        return source;
       }
     },
   });
@@ -161,10 +172,18 @@ test("recording entry, denied permission, successful WAV upload, and cancellatio
     recordingSeconds: 17,
   };
   let uploaded: ArrayBuffer | undefined;
+  let uploadCount = 0;
+  let sessionInput: {
+    part?: "lead" | "harmony";
+    referenceTakeIds?: string[];
+    addTrack?: boolean;
+  } = {};
   globalThis.fetch = async (url, options) => {
     if (String(url).includes("/api/bootstrap")) return Response.json(bootstrap);
-    if (String(url).includes("start_recording_session"))
+    if (String(url).includes("start_recording_session")) {
+      sessionInput = JSON.parse(String(options!.body));
       return Response.json({ sessionId: "test-session" });
+    }
     if (String(url).includes("/api/recordings/test-session/audio")) {
       uploaded = await (options!.body as Blob).arrayBuffer();
       assert.equal(Buffer.from(uploaded).toString("ascii", 0, 4), "RIFF");
@@ -173,23 +192,59 @@ test("recording entry, denied permission, successful WAV upload, and cancellatio
         new DataView(uploaded).getInt16(44, true) > 0,
         "Captured audio must not be an empty or silent upload",
       );
+      const takeId = ++uploadCount === 1 ? "actual-take" : "overdub-take";
       bootstrap.songs[0].takes.push({
-        id: "actual-take",
+        id: takeId,
+        trackNumber: uploadCount,
+        name: sessionInput.addTrack ? "Alex · Sung harmony" : "Alex · Voice",
+        referenceTakeIds: sessionInput.referenceTakeIds,
         songId: "test-song",
         actor: "alex",
-        part: "lead",
+        part: sessionInput.part ?? "lead",
         file: "take.wav",
         url: "/test-recording.wav",
         sampleRate: 48000,
         duration: 16000 / 48000,
         gain: 0.8,
         offsetMs: 0,
-        active: true,
+        active: false,
+        reviewStatus: "draft",
         muted: false,
         source: "microphone",
         createdAt: new Date().toISOString(),
       });
-      return Response.json({ takeId: "actual-take" });
+      return Response.json({ takeId });
+    }
+    if (String(url).includes("review_take")) {
+      const input = JSON.parse(String(options!.body));
+      const take = bootstrap.songs[0].takes.find((t) => t.id === input.takeId)!;
+      take.reviewStatus =
+        input.decision === "keep"
+          ? "kept"
+          : input.decision === "restore"
+            ? "draft"
+            : "discarded";
+      take.active = input.decision === "keep";
+      return Response.json({ takeId: take.id, status: take.reviewStatus });
+    }
+    if (String(url).includes("generate_harmony")) {
+      assert.equal(
+        bootstrap.songs[0].takes[0].reviewStatus,
+        "kept",
+        "Harmony requires explicit acceptance",
+      );
+      bootstrap.songs[0].mixes.push({
+        id: "generated",
+        songId: "test-song",
+        actor: "alex",
+        kind: "harmony",
+        sourceTakeId: "actual-take",
+        status: "queued",
+        tracks: [],
+        fingerprint: "test",
+        createdAt: new Date().toISOString(),
+      });
+      return Response.json({ jobId: "generated" });
     }
     if (String(url) === "/test-recording.wav") return new Response(uploaded);
     throw new Error(`Unexpected request ${String(url).split("?")[0]}`);
@@ -234,6 +289,27 @@ test("recording entry, denied permission, successful WAV upload, and cancellatio
     await screen.findByText(/HUMAN RECORDING/);
     assert.ok(uploaded);
     assert.ok(stoppedTracks > 0, "The microphone is released after saving");
+    assert.equal(
+      bootstrap.songs[0].takes[0].active,
+      false,
+      "Uploading must leave an unselected draft",
+    );
+    assert.equal(
+      bootstrap.songs[0].mixes.length,
+      0,
+      "No harmony job before acceptance",
+    );
+    assert.equal(screen.queryByRole("button", { name: "Melody" }), null);
+    fireEvent.click(screen.getByRole("button", { name: "Discard this take" }));
+    await screen.findByRole("button", { name: "Undo" });
+    assert.equal(bootstrap.songs[0].takes[0].reviewStatus, "discarded");
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await screen.findByRole("button", { name: "Keep this take" });
+    fireEvent.click(screen.getByRole("button", { name: "Keep this take" }));
+    await screen.findByText("Finding your other voice…");
+    assert.equal(bootstrap.songs[0].takes[0].active, true);
+    assert.equal(bootstrap.songs[0].mixes.length, 1);
+    fireEvent.click(screen.getByRole("button", { name: "Sing another take" }));
     permissionMode = "pending";
     fireEvent.click(screen.getByRole("button", { name: "Record my part" }));
     fireEvent.click(
@@ -256,6 +332,51 @@ test("recording entry, denied permission, successful WAV upload, and cancellatio
         stoppedTracks > before,
         "A late microphone permission grant must not leave capture running after cancel",
       ),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to my kept recording" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sing with selected tracks" }),
+    );
+    const overdubRecord = screen.getByRole("button", {
+      name: "Record my part",
+    }) as HTMLButtonElement;
+    assert.equal(
+      overdubRecord.disabled,
+      true,
+      "Reference playback needs an explicit headphone choice",
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "I’m wearing headphones" }),
+    );
+    assert.equal(overdubRecord.disabled, false);
+    permissionMode = "granted";
+    fireEvent.click(overdubRecord);
+    await screen.findByRole("button", { name: "Keep this take" });
+    assert.ok(
+      referenceStarts > 0,
+      "Reference tracks must actually be scheduled during overdubbing",
+    );
+    assert.equal(sessionInput.addTrack, true);
+    assert.deepEqual(sessionInput.referenceTakeIds, ["actual-take"]);
+    assert.equal(bootstrap.songs[0].takes[1].part, "harmony");
+    assert.deepEqual(bootstrap.songs[0].takes[1].referenceTakeIds, [
+      "actual-take",
+    ]);
+    assert.equal(
+      new DataView(uploaded!).getInt16(44, true),
+      8192,
+      "Reference playback must not be mixed into microphone PCM",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Keep this take" }));
+    await waitFor(() =>
+      assert.equal(bootstrap.songs[0].takes[1].reviewStatus, "kept"),
+    );
+    assert.equal(
+      bootstrap.songs[0].mixes.length,
+      1,
+      "Human overdubs should not automatically generate another voice",
     );
   } finally {
     cleanup();

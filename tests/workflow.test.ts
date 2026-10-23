@@ -104,7 +104,7 @@ test("real HTTP MCP → independent takes → ffmpeg → confirmed private gift,
     const client = await runtime.tools.connect("alex");
     try {
       const listed = await client.listTools();
-      assert.equal(listed.tools.length, 10);
+      assert.equal(listed.tools.length, 13);
       assert.ok(listed.tools.some((t) => t.name === "create_mix"));
     } finally {
       await client.close();
@@ -115,16 +115,13 @@ test("real HTTP MCP → independent takes → ffmpeg → confirmed private gift,
       idempotencyKey: "one",
     });
     const songId = (created.song as { id: string }).id;
-    const guideResponse = await api("alex", "/api/agent", {
-      text: "Teach me the lower harmony",
+    const recordingPrompt = await api("alex", "/api/agent", {
+      text: "I feel like singing",
       songId,
     });
-    assert.equal(guideResponse.status, 200);
-    const guidance = await guideResponse.json();
-    assert.equal(guidance.mode, "scripted");
-    assert.equal(guidance.action.type, "guide");
-    assert.equal(guidance.action.part, "harmony");
-    assert.equal((await request(guidance.action.url)).status, 200);
+    const prompted = await recordingPrompt.json();
+    assert.equal(prompted.action.type, "record");
+    assert.ok(!JSON.stringify(prompted).includes("guide"));
     const same = await call("alex", "create_song", {
       title: "Test duet",
       idempotencyKey: "one",
@@ -167,6 +164,36 @@ test("real HTTP MCP → independent takes → ffmpeg → confirmed private gift,
       {},
     );
     assert.equal((await replay.json()).takeId, firstId);
+    assert.equal(
+      runtime.store.read().takes.find((t) => t.id === firstId)?.active,
+      false,
+    );
+    assert.notEqual(
+      (await api("alex", "/api/tools/create_mix", { songId })).status,
+      200,
+      "Drafts must not enter a mix",
+    );
+    assert.notEqual(
+      (
+        await api("ben", "/api/tools/review_take", {
+          songId,
+          takeId: firstId,
+          decision: "keep",
+        })
+      ).status,
+      200,
+    );
+    const hiddenDraft = await call("ben", "get_song", { songId });
+    assert.ok(
+      !(hiddenDraft.song as { takes: { id: string }[] }).takes.some(
+        (t) => t.id === firstId,
+      ),
+    );
+    await call("alex", "review_take", {
+      songId,
+      takeId: firstId,
+      decision: "keep",
+    });
     const original = runtime.store.read().takes.find((t) => t.id === firstId)!;
     const originalBytes = readFileSync(
       path.join(runtime.harmony.audioDir, original.file),
@@ -182,6 +209,11 @@ test("real HTTP MCP → independent takes → ffmpeg → confirmed private gift,
     );
     assert.equal(second.status, 200);
     const secondId = (await second.json()).takeId;
+    await call("ben", "review_take", {
+      songId,
+      takeId: secondId,
+      decision: "keep",
+    });
     assert.notEqual(
       (
         await api("ben", "/api/tools/set_track_mix", {
@@ -298,7 +330,7 @@ test("real HTTP MCP → independent takes → ffmpeg → confirmed private gift,
       401,
     );
 
-    // Retake creates a third independent file; shared mix still points at the original two.
+    // An unconfirmed retake leaves the original selected; shared mix still points at the original two.
     const retakeSession = await call("alex", "start_recording_session", {
       songId,
       part: "lead",
@@ -318,8 +350,95 @@ test("real HTTP MCP → independent takes → ffmpeg → confirmed private gift,
     );
     assert.equal(
       runtime.store.read().takes.find((t) => t.id === firstId)?.active,
+      true,
+    );
+    const retakeId = (await retake.json()).takeId;
+    assert.equal(
+      runtime.store.read().takes.find((t) => t.id === retakeId)?.reviewStatus,
+      "draft",
+    );
+    assert.notEqual(
+      (
+        await api("alex", "/api/tools/generate_harmony", {
+          songId,
+          takeId: retakeId,
+        })
+      ).status,
+      200,
+    );
+    assert.notEqual(
+      (
+        await api("alex", "/api/tools/set_track_mix", {
+          songId,
+          takeId: retakeId,
+          active: true,
+        })
+      ).status,
+      200,
+    );
+    await call("alex", "review_take", {
+      songId,
+      takeId: retakeId,
+      decision: "discard",
+    });
+    assert.equal(
+      runtime.store.read().takes.find((t) => t.id === firstId)?.active,
+      true,
+    );
+    await call("alex", "review_take", {
+      songId,
+      takeId: retakeId,
+      decision: "restore",
+    });
+    await call("alex", "review_take", {
+      songId,
+      takeId: retakeId,
+      decision: "keep",
+    });
+    await call("alex", "review_take", {
+      songId,
+      takeId: retakeId,
+      decision: "keep",
+    });
+    assert.equal(
+      runtime.store.read().takes.find((t) => t.id === firstId)?.active,
       false,
     );
+    const generated = await call("alex", "generate_harmony", {
+      songId,
+      takeId: retakeId,
+    });
+    const duplicate = await call("alex", "generate_harmony", {
+      songId,
+      takeId: retakeId,
+    });
+    assert.equal(duplicate.jobId, generated.jobId);
+    for (let i = 0; i < 150; i++) {
+      const result = await call("alex", "get_mix_status", {
+        jobId: generated.jobId,
+      });
+      if (result.status === "failed" || result.status === "ready") break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const generatedMix = runtime.store
+      .read()
+      .mixes.find((m) => m.id === generated.jobId)!;
+    assert.equal(generatedMix.status, "ready", generatedMix.error);
+    assert.equal(generatedMix.tracks[1].source, "generated-harmony");
+    assert.ok(generatedMix.estimatedKey);
+    assert.deepEqual(
+      readFileSync(path.join(runtime.harmony.audioDir, original.file)),
+      originalBytes,
+    );
+    assert.notEqual(
+      (
+        await api("mom", "/api/tools/get_mix_status", {
+          jobId: generated.jobId,
+        })
+      ).status,
+      200,
+    );
+
     assert.equal(
       runtime.store.read().mixes.find((m) => m.id === job.jobId)?.tracks[0].id,
       firstId,

@@ -1,13 +1,16 @@
 import { randomUUID, createHash } from "node:crypto";
-import { existsSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { Store } from "./store.ts";
 import { Tokens, assert, AppError } from "./security.ts";
 import { normalizeUpload, renderMix } from "./audio.ts";
-import { renderGuide, SONG_SECONDS } from "../shared/music.ts";
+import { RECORDING_SECONDS } from "../shared/music.ts";
+import { renderHarmony } from "./harmonize.ts";
 import {
   PEOPLE,
+  DEFAULT_HARMONY,
+  harmonyLabel,
   type Actor,
   type State,
   type Song,
@@ -19,31 +22,59 @@ import {
 
 const id = z.string().min(1).max(128);
 const actor = z.enum(["alex", "ben", "mom"]);
+const trackIds = z
+  .array(id)
+  .min(1)
+  .max(8)
+  .refine(
+    (ids) => new Set(ids).size === ids.length,
+    "Select each track only once.",
+  );
+const harmonyOptions = {
+  direction: z.enum(["higher", "lower"]).default("lower"),
+  interval: z.union([z.literal(3), z.literal(5), z.literal(6)]).default(3),
+};
 export const schemas = {
   create_song: z
     .object({
-      title: z.string().trim().min(1).max(80).default("A little closer"),
+      title: z.string().trim().min(1).max(80).default("Untitled song"),
       idempotencyKey: id,
     })
     .strict(),
   get_song: z.object({ songId: id }).strict(),
-  get_harmony_guide: z
-    .object({ songId: id, part: z.enum(["lead", "harmony"]) })
+  list_tracks: z.object({ songId: id }).strict(),
+  play_tracks: z.object({ songId: id, takeIds: trackIds }).strict(),
+  review_take: z
+    .object({
+      songId: id,
+      takeId: id,
+      decision: z.enum(["keep", "discard", "restore"]),
+    })
+    .strict(),
+  generate_harmony: z
+    .object({ songId: id, takeId: id, ...harmonyOptions })
     .strict(),
   start_recording_session: z
-    .object({ songId: id, part: z.enum(["lead", "harmony"]) })
+    .object({
+      songId: id,
+      part: z.enum(["lead", "harmony"]),
+      referenceTakeIds: trackIds.optional(),
+      addTrack: z.boolean().default(false),
+      replacesTakeId: id.optional(),
+    })
     .strict(),
   set_track_mix: z
     .object({
       songId: id,
       takeId: id,
+      name: z.string().trim().min(1).max(80).optional(),
       gain: z.number().min(0).max(1.5).optional(),
       offsetMs: z.number().min(-1500).max(1500).optional(),
       muted: z.boolean().optional(),
       active: z.boolean().optional(),
     })
     .strict(),
-  create_mix: z.object({ songId: id }).strict(),
+  create_mix: z.object({ songId: id, takeIds: trackIds.optional() }).strict(),
   get_mix_status: z.object({ jobId: id }).strict(),
   create_surprise: z
     .object({
@@ -64,17 +95,23 @@ export const schemas = {
 export type ToolName = keyof typeof schemas;
 export const descriptions: Record<ToolName, string> = {
   create_song:
-    "Create a project for the original A little closer exercise. Idempotent per user/key.",
+    "Create a project for a short song the user chooses to sing. Idempotent per user/key.",
   get_song:
     "Read an authorized song, independent takes, immutable mixes and playback links.",
-  get_harmony_guide:
-    "Get a curated instrumental lead or lower harmony guide. This is not generated from a recording.",
+  list_tracks:
+    "List all kept tracks with stable track numbers, names, origin, playback URLs and mix settings. Drafts are excluded.",
+  play_tracks:
+    "Return authorized independent tracks to play together using exactly the selected takeIds (one to eight). This does not record or alter the song.",
+  review_take:
+    "Keep, discard or restore the singer’s own recorded draft only when they explicitly ask. A draft never replaces a kept take before confirmation. Discard is reversible.",
+  generate_harmony:
+    "Queue a generated high or low 3rd, perfect 5th, or diatonic 6th from a kept source recording. Each variant becomes an independent track. Uses DSP, not a generative AI voice model. Returns a jobId immediately; source audio remains unchanged.",
   start_recording_session:
-    "Prepare a short-lived browser microphone recording card. Does not access Echo audio.",
+    "Prepare a browser microphone card for up to 30 seconds. For overdubbing set referenceTakeIds, part=harmony, addTrack=true; the client plays these exact tracks in headphones while capturing a separate microphone track. For a retake set replacesTakeId. Recording requires a user click; the result is a draft for review. Does not access Echo audio.",
   set_track_mix:
     "Adjust a take gain, mute, active status or signed offset. Positive offset delays the take.",
   create_mix:
-    "Queue a real ffmpeg mix of active audible takes and immediately return a jobId.",
+    "Queue a real ffmpeg mix from explicit takeIds, or all active audible kept tracks when omitted. Returns a jobId immediately.",
   get_mix_status:
     "Read mix job status and a short-lived playback URL when ready.",
   create_surprise:
@@ -86,7 +123,8 @@ export const descriptions: Record<ToolName, string> = {
 };
 export const readOnlyTools = new Set<ToolName>([
   "get_song",
-  "get_harmony_guide",
+  "list_tracks",
+  "play_tracks",
   "get_mix_status",
   "list_surprises",
 ]);
@@ -101,14 +139,32 @@ export class Harmony {
     readonly tokens: Tokens,
   ) {
     this.audioDir = path.join(store.directory, "audio");
-    for (const part of ["lead", "harmony"] as const) {
-      const file = path.join(this.audioDir, `guide-${part}.wav`);
-      if (!existsSync(file))
-        writeFileSync(file, renderGuide(part), { mode: 0o600 });
-    }
     store.update((state) => {
-      for (const mix of state.mixes)
+      // Lift earlier generated stems out of mix snapshots without changing files/gifts.
+      for (const mix of state.mixes) {
         if (mix.status === "running") mix.status = "queued";
+        for (const take of mix.tracks) {
+          if (
+            mix.status === "ready" &&
+            take.source === "generated-harmony" &&
+            !state.takes.some((t) => t.id === take.id)
+          )
+            state.takes.push({
+              ...take,
+              name: harmonyLabel(mix.harmonyOptions),
+              harmonyOptions: mix.harmonyOptions ?? DEFAULT_HARMONY,
+              reviewStatus: "kept",
+              active: true,
+            });
+        }
+      }
+      for (const take of state.takes) {
+        take.trackNumber ??= this.nextTrackNumber(state, take.songId);
+        take.name ??=
+          take.source === "generated-harmony"
+            ? harmonyLabel(take.harmonyOptions)
+            : `${PEOPLE.find((p) => p.id === take.actor)!.name} · ${take.part === "lead" ? "Voice" : "Sung harmony"}`;
+      }
     });
     void this.runJobs();
   }
@@ -119,6 +175,38 @@ export class Harmony {
     assert(song, "This song is not available to your account.", 403);
     return song;
   }
+  private nextTrackNumber(state: State, songId: string) {
+    return (
+      Math.max(
+        0,
+        ...state.takes
+          .filter((t) => t.songId === songId)
+          .map((t) => t.trackNumber ?? 0),
+      ) + 1
+    );
+  }
+  private selectedTracks(
+    state: State,
+    actorId: Actor,
+    songId: string,
+    ids: string[],
+  ) {
+    this.member(state, actorId, songId);
+    return ids.map((id) => {
+      const take = state.takes.find(
+        (t) =>
+          t.id === id &&
+          t.songId === songId &&
+          (t.reviewStatus ?? "kept") === "kept",
+      );
+      assert(
+        take,
+        "A selected track is unavailable or has not been kept.",
+        403,
+      );
+      return take;
+    });
+  }
   assetUrl(file: string, actorId: Actor) {
     return `/api/audio/${encodeURIComponent(file)}?token=${this.tokens.sign({ purpose: "audio", file, actor: actorId }, 300)}`;
   }
@@ -126,7 +214,11 @@ export class Harmony {
     return {
       ...song,
       takes: state.takes
-        .filter((t) => t.songId === song.id)
+        .filter(
+          (t) =>
+            t.songId === song.id &&
+            ((t.reviewStatus ?? "kept") === "kept" || t.actor === actorId),
+        )
         .map((t) => ({ ...t, url: this.assetUrl(t.file, actorId) })),
       mixes: state.mixes
         .filter((m) => m.songId === song.id)
@@ -164,6 +256,10 @@ export class Harmony {
             state.mixes
               .find((m) => m.id === s.mixId)
               ?.tracks.some((t) => t.source === "sample-tone") ?? false,
+          containsGeneratedHarmony:
+            state.mixes
+              .find((m) => m.id === s.mixId)
+              ?.tracks.some((t) => t.source === "generated-harmony") ?? false,
         })),
       traces: state.traces
         .filter((t) => t.actor === actorId)
@@ -171,7 +267,7 @@ export class Harmony {
         .reverse(),
       agentMode: process.env.BEDROCK_MODEL_ID ? "bedrock" : "scripted",
       protocol: "2025-11-25",
-      recordingSeconds: SONG_SECONDS,
+      recordingSeconds: 30,
     };
   }
   async call(
@@ -193,9 +289,12 @@ export class Harmony {
         name,
         started,
         true,
-        name === "create_mix" ? "Mix job queued" : "Completed",
+        name === "create_mix" || name === "generate_harmony"
+          ? "Audio job queued"
+          : "Completed",
       );
-      if (name === "create_mix") void this.runJobs();
+      if (name === "create_mix" || name === "generate_harmony")
+        void this.runJobs();
       return result;
     } catch (error) {
       this.trace(
@@ -271,16 +370,118 @@ export class Harmony {
             actorId,
           ),
         };
-      if (name === "get_harmony_guide") {
-        this.member(state, actorId, songId);
+      if (name === "list_tracks") {
+        const view = this.songView(
+          state,
+          this.member(state, actorId, songId),
+          actorId,
+        );
         return {
-          part: a.part,
-          url: this.assetUrl(`guide-${a.part}.wav`, actorId),
-          source: "curated-guide-tone",
-          title: "A little closer",
-          bpm: 112,
-          duration: SONG_SECONDS,
+          tracks: view.takes.filter(
+            (t) => (t.reviewStatus ?? "kept") === "kept",
+          ),
         };
+      }
+      if (name === "play_tracks") {
+        const tracks = this.selectedTracks(
+          state,
+          actorId,
+          songId,
+          a.takeIds as string[],
+        );
+        return {
+          tracks: tracks.map((t) => ({
+            ...t,
+            url: this.assetUrl(t.file, actorId),
+          })),
+          takeIds: tracks.map((t) => t.id),
+        };
+      }
+      if (name === "review_take") {
+        this.member(state, actorId, songId);
+        const take = state.takes.find(
+          (t) =>
+            t.id === a.takeId && t.songId === songId && t.actor === actorId,
+        );
+        assert(take, "This recording is not yours to review.", 403);
+        if (a.decision === "keep") {
+          assert(
+            take.reviewStatus !== "discarded",
+            "Restore this recording before keeping it.",
+            409,
+          );
+          if ((take.reviewStatus ?? "kept") === "kept")
+            return { takeId: take.id, status: "kept" };
+          for (const previous of state.takes)
+            if (
+              previous.songId === songId &&
+              (previous.id === take.replacesTakeId ||
+                (previous.parentTakeId === take.replacesTakeId &&
+                  !!take.replacesTakeId))
+            )
+              previous.active = false;
+          take.reviewStatus = "kept";
+          take.active = true;
+        } else if (a.decision === "discard") {
+          assert(
+            take.reviewStatus === "draft" || take.reviewStatus === "discarded",
+            "Only an unconfirmed recording can be discarded here.",
+            409,
+          );
+          take.reviewStatus = "discarded";
+          take.active = false;
+        } else {
+          assert(
+            take.reviewStatus === "discarded" || take.reviewStatus === "draft",
+            "This recording is already kept.",
+            409,
+          );
+          for (const other of state.takes)
+            if (
+              other.id !== take.id &&
+              other.songId === songId &&
+              other.actor === actorId &&
+              other.reviewStatus === "draft"
+            )
+              other.reviewStatus = "discarded";
+          take.reviewStatus = "draft";
+          take.active = false;
+        }
+        return { takeId: take.id, status: take.reviewStatus };
+      }
+      if (name === "generate_harmony") {
+        this.member(state, actorId, songId);
+        const take = state.takes.find(
+          (t) =>
+            t.id === a.takeId &&
+            t.songId === songId &&
+            t.source !== "generated-harmony" &&
+            (t.reviewStatus ?? "kept") === "kept",
+        );
+        assert(take, "Keep your recording before generating harmony.", 409);
+        const options = {
+          direction: a.direction as "higher" | "lower",
+          interval: a.interval as 3 | 5 | 6,
+        };
+        const fingerprint = `harmony-v2:${take.id}:${options.direction}:${options.interval}`;
+        const previous = state.mixes.find(
+          (m) => m.fingerprint === fingerprint && m.status !== "failed",
+        );
+        if (previous) return { jobId: previous.id, status: previous.status };
+        const job = {
+          id: randomUUID(),
+          songId,
+          actor: actorId,
+          kind: "harmony" as const,
+          sourceTakeId: take.id,
+          harmonyOptions: options,
+          status: "queued" as const,
+          tracks: [structuredClone(take)],
+          createdAt: iso(),
+          fingerprint,
+        };
+        state.mixes.push(job);
+        return { jobId: job.id, status: job.status };
       }
       if (name === "start_recording_session") {
         this.member(state, actorId, songId);
@@ -288,12 +489,46 @@ export class Harmony {
           state.takes.filter((t) => t.songId === songId).length < 40,
           "This demo song has reached its take limit. Create another song.",
         );
+        const references = a.referenceTakeIds
+          ? this.selectedTracks(
+              state,
+              actorId,
+              songId,
+              a.referenceTakeIds as string[],
+            )
+          : [];
+        let replacesTakeId = a.replacesTakeId as string | undefined;
+        if (replacesTakeId)
+          assert(
+            state.takes.some(
+              (t) =>
+                t.id === replacesTakeId &&
+                t.actor === actorId &&
+                t.songId === songId &&
+                t.source !== "generated-harmony" &&
+                (t.reviewStatus ?? "kept") === "kept",
+            ),
+            "Only your own kept voice track can be replaced.",
+            403,
+          );
+        if (!a.addTrack && !replacesTakeId)
+          replacesTakeId = state.takes.findLast(
+            (t) =>
+              t.songId === songId &&
+              t.actor === actorId &&
+              t.part === a.part &&
+              t.source !== "generated-harmony" &&
+              t.active &&
+              (t.reviewStatus ?? "kept") === "kept",
+          )?.id;
         const session = {
           id: randomUUID(),
           actor: actorId,
           songId,
           part: a.part as "lead" | "harmony",
           expires: Date.now() + 10 * 60 * 1000,
+          referenceTakeIds: references.map((t) => t.id),
+          replacesTakeId,
         };
         state.recordings = state.recordings.filter(
           (r) => r.expires > Date.now(),
@@ -302,8 +537,9 @@ export class Harmony {
         return {
           sessionId: session.id,
           part: session.part,
+          referenceTakeIds: session.referenceTakeIds,
           expiresAt: new Date(session.expires).toISOString(),
-          duration: SONG_SECONDS,
+          duration: RECORDING_SECONDS,
         };
       }
       if (name === "set_track_mix") {
@@ -313,19 +549,37 @@ export class Harmony {
         );
         assert(take, "Take not found.", 404);
         assert(
+          (take.reviewStatus ?? "kept") === "kept",
+          "Review this recording before changing its mix.",
+          409,
+        );
+        assert(
           actorId === song.owner || actorId === take.actor,
           "Only the singer or song owner can change this take.",
           403,
         );
-        for (const key of ["gain", "offsetMs", "muted", "active"] as const)
+        for (const key of [
+          "name",
+          "gain",
+          "offsetMs",
+          "muted",
+          "active",
+        ] as const)
           if (a[key] !== undefined) Object.assign(take, { [key]: a[key] });
         return { take: { ...take, url: this.assetUrl(take.file, actorId) } };
       }
       if (name === "create_mix") {
         this.member(state, actorId, songId);
-        const tracks = state.takes.filter(
-          (t) => t.songId === songId && t.active && !t.muted && t.gain > 0,
-        );
+        const tracks = a.takeIds
+          ? this.selectedTracks(state, actorId, songId, a.takeIds as string[])
+          : state.takes.filter(
+              (t) =>
+                t.songId === songId &&
+                (t.reviewStatus ?? "kept") === "kept" &&
+                t.active &&
+                !t.muted &&
+                t.gain > 0,
+            );
         assert(
           tracks.length > 0 && tracks.length <= 8,
           "Record a take first; a mix supports up to eight audible takes.",
@@ -367,6 +621,8 @@ export class Harmony {
           jobId: mix.id,
           status: mix.status,
           error: mix.error,
+          kind: mix.kind,
+          estimatedKey: mix.estimatedKey,
           ...(mix.file ? { url: this.assetUrl(mix.file, actorId) } : {}),
         };
       }
@@ -521,14 +777,15 @@ export class Harmony {
           unlinkSync(path.join(this.audioDir, audio.file));
           return { takeId: current.takeId };
         }
-        // A retake preserves the file and metadata; only the previous take selection changes.
+        // Upload is provisional. Selection changes only on explicit review.
         for (const take of state.takes)
           if (
             take.songId === current.songId &&
             take.actor === actorId &&
-            take.part === current.part
+            take.part === current.part &&
+            take.reviewStatus === "draft"
           )
-            take.active = false;
+            take.reviewStatus = "discarded";
         const take: Take = {
           id: randomUUID(),
           songId: current.songId,
@@ -538,8 +795,13 @@ export class Harmony {
           gain: 0.8,
           offsetMs: Math.round(offsetMs),
           muted: false,
-          active: true,
+          active: false,
+          reviewStatus: "draft",
           createdAt: iso(),
+          trackNumber: this.nextTrackNumber(state, current.songId),
+          name: `${PEOPLE.find((p) => p.id === actorId)!.name} · ${current.part === "lead" ? "Voice" : "Sung harmony"}`,
+          referenceTakeIds: current.referenceTakeIds,
+          replacesTakeId: current.replacesTakeId,
           source: sample ? "sample-tone" : "microphone",
           capture: metadata.capture,
         };
@@ -564,10 +826,14 @@ export class Harmony {
   }
   authorizeAudio(actorId: Actor, file: string) {
     const state = this.store.read();
-    if (file === "guide-lead.wav" || file === "guide-harmony.wav") return;
     const take = state.takes.find((t) => t.file === file);
     if (take) {
       this.member(state, actorId, take.songId);
+      assert(
+        (take.reviewStatus ?? "kept") === "kept" || take.actor === actorId,
+        "This draft belongs to another singer.",
+        403,
+      );
       return;
     }
     const mix = state.mixes.find(
@@ -600,21 +866,70 @@ export class Harmony {
         });
         if (!mix) break;
         try {
+          let estimatedKey: string | undefined;
+          let harmonyFile: string | undefined;
+          if (mix.kind === "harmony") {
+            const generated = await renderHarmony(
+              mix.tracks[0].file,
+              this.audioDir,
+              mix.id,
+              mix.harmonyOptions,
+            );
+            estimatedKey = generated.estimatedKey;
+            harmonyFile = generated.file;
+            const source = mix.tracks[0];
+            mix.tracks.push({
+              ...source,
+              actor: mix.actor,
+              createdAt: mix.createdAt,
+              name: harmonyLabel(mix.harmonyOptions),
+              harmonyOptions: mix.harmonyOptions ?? DEFAULT_HARMONY,
+              referenceTakeIds: undefined,
+              replacesTakeId: undefined,
+              trackNumber: undefined,
+              capture: undefined,
+              id: `${mix.id}-generated`,
+              file: harmonyFile,
+              part: "harmony",
+              gain: 0.45,
+              source: "generated-harmony",
+              parentTakeId: mix.sourceTakeId,
+              reviewStatus: "kept",
+              active: true,
+            });
+          }
           const file = await renderMix(mix.tracks, this.audioDir, mix.id);
           this.store.update((state) => {
+            if (mix.kind === "harmony") {
+              const generated = mix.tracks[1];
+              generated.active =
+                !mix.tracks[0].active ||
+                !!state.takes.find((take) => take.id === mix.sourceTakeId)
+                  ?.active;
+              generated.trackNumber = this.nextTrackNumber(state, mix.songId);
+              state.takes.push(generated);
+            }
             Object.assign(
               state.mixes.find((m) => m.id === mix.id)!,
-              { file, status: "ready" },
+              {
+                file,
+                status: "ready",
+                tracks: mix.tracks,
+                estimatedKey,
+                harmonyFile,
+              },
             );
           });
-        } catch {
+        } catch (error) {
           this.store.update((state) => {
             Object.assign(
               state.mixes.find((m) => m.id === mix.id)!,
               {
                 status: "failed",
                 error:
-                  "Audio rendering failed. Check ffmpeg and try a new mix.",
+                  error instanceof AppError
+                    ? error.message
+                    : "Audio rendering failed. Your recording is safe. Try again.",
               },
             );
           });

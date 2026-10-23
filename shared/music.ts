@@ -70,6 +70,7 @@ export const HARMONY = [
   null,
 ];
 export const SONG_SECONDS = (LEAD.length * 60) / BPM;
+export const RECORDING_SECONDS = 30;
 
 export function encodeWav(
   samples: Float32Array,

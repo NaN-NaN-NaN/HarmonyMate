@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+<rect width="1200" height="800" fill="#f7f6f1"/>
+<circle cx="1100" cy="100" r="300" fill="#ebece1"/><circle cx="1120" cy="90" r="235" fill="none" stroke="#d6dac8" stroke-width="2"/>
+<rect x="70" y="65" width="58" height="58" rx="15" fill="#a6533d"/>
+<g stroke="#fffefa" stroke-width="3" stroke-linecap="round"><path d="M84 89v10m8-20v30m8-38v46m8-33v20m8-13v6"/></g>
+<text x="146" y="105" font-family="Arial, sans-serif" font-size="39" font-weight="700" fill="#34362f">harmony<tspan font-weight="400">mate.</tspan></text>
+<text x="73" y="203" font-family="Arial, sans-serif" font-size="15" letter-spacing="3" fill="#887c69">YOUR VOICE. A LITTLE MORE TOGETHER.</text>
+<text x="67" y="299" font-family="Arial, sans-serif" font-size="77" letter-spacing="-3" fill="#34362f">Sing a little.</text>
+<text x="68" y="386" font-family="Georgia, serif" font-style="italic" font-size="78" letter-spacing="-2" fill="#a6533d">Hear the harmony.</text>
+<text x="73" y="442" font-family="Arial, sans-serif" font-size="23" fill="#7c786b">Sing. Create harmonies. Add a voice. Make a gift.</text>
+<rect x="70" y="503" width="1055" height="164" rx="25" fill="#fffefa" stroke="#e2ded2"/>
+<g font-family="Arial, sans-serif"><text x="101" y="540" font-size="12" letter-spacing="2" fill="#8b806c">INDEPENDENT VOICES, TOGETHER</text>
+<rect x="100" y="563" width="305" height="70" rx="12" fill="#f3e6dd"/><text x="124" y="593" font-size="17" fill="#8d4632">01   Your voice</text><text x="124" y="615" font-size="11" letter-spacing="1" fill="#9c7a65">RECORD · REVIEW · KEEP</text>
+<rect x="427" y="563" width="305" height="70" rx="12" fill="#e9edde"/><text x="451" y="593" font-size="17" fill="#66704f">02   High or low harmony</text><text x="451" y="615" font-size="11" letter-spacing="1" fill="#818966">3RD · 5TH · 6TH</text>
+<rect x="754" y="563" width="340" height="70" rx="12" fill="#eee9f0"/><text x="778" y="593" font-size="17" fill="#81718c">03   Another human voice</text><text x="778" y="615" font-size="11" letter-spacing="1" fill="#9985a0">LISTEN · SING · MIX</text>
+<text x="73" y="735" font-size="14" fill="#8b806c">Real MCP · Local audio processing · Simulated Alexa+ experience</text>
+</g></svg>

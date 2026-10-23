@@ -1,51 +1,41 @@
 # Implementation status
 
-Updated 2026-10-22. This file records implementation versus verification; the original planning document is not a completion checklist.
+Updated 2026-10-23.
+
+## Multitrack expansion
+
+- Six generated variants: high/low diatonic thirds and sixths, and perfect fifths. Each becomes an independent named/numbered kept track. Ready stems from earlier mixes are migrated into the track inventory without rewriting audio or gifts.
+- All kept original/generated/overdub tracks, including earlier versions, have individual playback/download. Multi-selection supports synchronized playback, exact-subset saved mixes and headphones overdubbing. Names, volume and signed timing can be changed per track.
+- Human overdubs preserve the selected reference IDs and remain separate microphone captures. They require explicit keep/discard review and add a new track; they do not deactivate the original voice or automatically spawn another generated part. Retakes target one explicit previous voice.
+- Thirteen MCP tools, including new list_tracks/play_tracks, selectable generate_harmony parameters, and recording reference/replacement fields. English/Chinese numbered track requests and descriptive harmony selection work without an LLM; missing/ambiguous references ask for clarification.
+- Numerical tests verify six generated intervals/durations, stable inventory and access controls, exact-subset mixing, additive overdubs, migration, bilingual commands and rejected references. UI/engine tests verify headphones acknowledgement and actual reference scheduling while uploaded PCM contains only the simulated microphone signal. Physical acoustic bleed and device latency still require rehearsal.
+ The main experience is now **free singing → draft review → generated harmony**. Earlier planning documents describe the former curated-melody prototype.
 
 ## Implemented
 
-- React/Vite interface: direct entry without login, a lightweight demo-singer selector, singing space, studio, role-scoped recipient inbox, and real MCP tool activity.
-- Node/Express backend, persistent SQLite and private local files. This is the chosen reproducible MVP storage in place of Supabase.
-- Ten official-SDK MCP tools over authenticated stateless Streamable HTTP; simulator actions cross the real HTTP boundary.
-- Original eight-bar lead and lower harmony guide tones; explicitly labeled sample-tone test path.
-- AudioWorklet PCM capture with frame metadata, shared AudioContext playback, count-in, wired-headphone acknowledgement and manual signed offset.
-- Separate takes, retake preservation, gain/mute, real waveform display and independent playback.
-- Persisted asynchronous ffmpeg mix jobs and immutable snapshots.
-- Actor-bound recording uploads, access-controlled short-lived audio links, per-song and per-recipient checks.
-- Explicit server-recorded share confirmation, fixed mix version, recipient opening and separate playback completion.
-- Scripted conversation and optional Bedrock Converse tool-use integration. Optional browser speech input/output.
-- Dockerfile, compose, MIT license, environment example, English README, tests and smoke script.
+- One focused session card: capture, review or harmony result. No melody suggestions, guide playback or mandatory headphones for solo capture; headphones are required only when monitoring selected tracks while overdubbing.
+- Up to 30 seconds of browser AudioWorklet PCM recording, three-second count-in, finish/cancel, persistent microphone errors/retry and microphone release.
+- Auto-preview after upload, explicit keep/retry/discard, reversible undo/restore and resumable drafts. Upload does not replace the previous kept take. Drafts are excluded from mixing and hidden from other project members.
+- Automatic background harmony generation after explicit acceptance. Stock ffmpeg, YIN-style pitch tracking, estimated major/minor key and selectable high/low thirds, perfect fifths and sixths. No external voice model/service or AI singer.
+- Original-versus-harmonized playback, generation progress/failure/retry, source-bound immutable results. A stale job cannot replace the newly selected source in the UI. Source audio remains unchanged.
+- Earlier recordings and projects behind a disclosure; download and optional exact-version gift confirmation after completion.
+- Thirteen authenticated Streamable HTTP MCP tools. Added `review_take` and `generate_harmony`; removed `get_harmony_guide`. Explicit keep/discard/undo voice/text commands work in scripted mode. Optional Bedrock excludes review tools and never accepts sharing confirmations.
+- Existing takes without reviewStatus are treated as kept for compatibility; existing gifts and files remain preserved.
+- SQLite/private files, demo roles, recipient inbox, access checks, idempotency, job persistence and immutable gift snapshots remain implemented.
 
-## Verified
+## Verification scope
 
-- TypeScript checking and Vite production build.
-- Real MCP initialization explicitly negotiates 2025-11-25; SDK client lists ten tools and executes them.
-- ffmpeg output from two independent synthetic sample tracks.
-- Positive and negative offsets against known impulse sample positions.
-- AudioWorklet starts at T0 across processing-block boundaries and flushes the final partial block.
-- Idempotent creation/upload/share, rejected cross-account reads/writes, rejected unaccepted share, expired-link rejection, fixed-version mix preservation after retakes.
-- Production-build browser workflow: Alex and Ben each save an explicitly labeled instrumental sample, ffmpeg renders their mix, Alex confirms a gift, Mom opens and plays it, and the gift changes from opened to heard only after playback finishes.
-- Real browser AudioWorklet self-check captured exactly 9,600 samples at 48 kHz starting at scheduled T0, without microphone access. This verifies browser capture plumbing, not physical device latency.
-- Narrow navigation and full desktop layout were checked; compact profile switching remains accessible. Screenshots are saved in `docs/screenshots/`.
-- Formatting check and dependency audit passed; no known production dependency vulnerabilities were reported at the time of the check.
+- TypeScript and production build; regression tests for microphone denial/retry/cancellation, captured PCM upload, review/undo and generation only after keep.
+- Real HTTP MCP transport and end-to-end ffmpeg workflow, draft privacy, rejected cross-actor confirmation, prevention of activating drafts through advanced mixing, idempotent generation and non-destructive retakes.
+- Known synthetic C/E/G/C phrase: estimated C major, changing three/four-semitone lower harmony, output pitch within tolerance, exact output sample duration, quiet rests and original byte preservation. Silence produces an actionable error.
+- UI rendering and browser behavior checked locally; microphone acoustic quality and musical quality on diverse real singing require device/user rehearsal. Synthetic measurements do not establish those results.
 
-## Requires a human/device or external environment
+## Boundaries
 
-- Physical microphone permission and acoustic loopback/headphone rehearsal, including the proposed 30 ms device-alignment target.
-- Browser-specific speech recognition and speech output behavior.
-- A successful Bedrock call with a configured model/account; AWS usage is not yet established.
-- Docker build/run: local Docker daemon is unavailable.
-- Public deployment, managed storage, production identity, signed contributor invitations and Alexa-native onboarding.
-- Original melody rehearsal by actual singers, English video recording, Product Feedback, and Devpost submission.
+Local harmony uses pitch-shifted recordings and can sound processed. Short monophonic unaccompanied singing works best. Key estimation is approximate. No lyrics/chord understanding, formant-preserving AI voice, accompaniment generation, arbitrary-song catalog or real-time remote singing.
 
-## Operational boundaries
+No native Echo recording, Alexa account linking, voice identity or proactive Alexa notifications. The browser is the input/playback surface. Optional Bedrock needs real account validation. Docker runtime and public deployment remain environment-dependent. Demo roles are freely switchable; they are not production authentication.
 
-Single instance only; local storage must be persistent. Demo accounts are shared and unsuitable for private real-family recordings. No live Echo audio, automatic harmony inference, automatic hardware latency calibration, Polly or proactive native Alexa notifications. These must remain explicit in the submission.
+## Local launch
 
-## Recording usability fix
-
-- Removed the login/password screen. Fresh visitors enter as Alex and can switch demo roles directly. Internal MCP credentials and per-role resource checks remain enforced.
-- Reproduced the unavailable-recording symptom: Record my part was disabled until an unexplained headphone acknowledgement. That gate is removed; headphones now only control reference monitoring, which is off by default.
-- Added obvious Record my voice / Record a voice entry points that reveal and scroll to the recorder.
-- Microphone permission and audio activation now start during the recording click, before MCP/network awaits. Setup has cancellation and bounded waits; permission/device errors remain visible next to the recorder with retry instructions.
-- Added UI regressions using simulated microphone/worklet inputs for denied access, retry, real PCM-to-WAV upload, and cancellation followed by late permission. These do not claim a physical microphone or acoustic-latency test.
+The current workstation uses `.env` PORT=3001 because another project also binds 3000. Use the printed terminal URL. Only one HarmonyMate process should use this data directory.
